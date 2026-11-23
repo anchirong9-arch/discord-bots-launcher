@@ -92,6 +92,7 @@ BOTS = [
     {
         "id": "log-bot",
         "name": "료그봇",
+        "auto_start": True,
         "folder": "tools/log-bot",
         "modules": ["discord", "dotenv"],
         "hint": "discord.py · python-dotenv",
@@ -109,6 +110,7 @@ BOTS = [
     {
         "id": "music-bot",
         "name": "뮤직봇",
+        "auto_start": False,
         "folder": "tools/music-bot",
         "modules": ["discord", "dotenv", "yt_dlp"],
         "hint": "discord.py · yt-dlp · PyNaCl",
@@ -631,11 +633,15 @@ def bot_status(bot: dict) -> dict:
 
 
 def start_bots() -> None:
-    """실행 시 자동으로 — 토큰이 있는 봇만 켭니다. 없으면 상태만 '토큰 미설정'."""
+    """실행 시 자동으로 — auto_start 가 켜져 있고 토큰이 있는 봇만 켭니다."""
     for bot in BOTS:
         if not bot_token(bot):
             set_bot_state(bot["id"], note="토큰 설정 필요", error="")
             log("%s — 토큰이 아직 없어서 켜지 않았습니다. (.env 를 넣거나 상태판에서 설정)" % bot["name"])
+            continue
+        if not bot.get("auto_start", True):
+            set_bot_state(bot["id"], note="수동 실행 (필요할 때 켜기 버튼)", error="")
+            log("%s — 수동 실행 설정이라 켜지 않았습니다. (상태판에서 켜기 가능)" % bot["name"])
             continue
         result = spawn_bot(bot)
         if not result.get("ok"):

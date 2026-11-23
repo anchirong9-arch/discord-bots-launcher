@@ -252,6 +252,7 @@ class MusicPlayer:
 
         try:
             self._ended.clear()  # 이전 곡에서 남은 신호를 지운다
+            log.info("FFmpeg 재생 시작: %s (exe=%s)", track.title, FFMPEG)
             source = discord.FFmpegPCMAudio(
                 url,
                 executable=FFMPEG,
