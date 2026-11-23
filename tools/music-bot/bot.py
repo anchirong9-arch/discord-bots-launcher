@@ -76,6 +76,8 @@ YDL_OPTIONS = {
     "default_search": "ytsearch1",
     "cachedir": False,
     "source_address": "0.0.0.0",
+    "socket_timeout": 12,
+    "extractor_retries": 1,
 }
 
 URL_RE = re.compile(r"^(https?://|www\.)", re.IGNORECASE)
@@ -409,12 +411,18 @@ async def play(interaction: discord.Interaction, 검색어: str) -> None:
         return
 
     player = bot.player(interaction.guild)
+    log.info("검색 시작: %s", 검색어)
     try:
-        info = await asyncio.to_thread(extract_sync, 검색어)
+        info = await asyncio.wait_for(asyncio.to_thread(extract_sync, 검색어), timeout=20.0)
+    except asyncio.TimeoutError:
+        log.warning("검색 시간 초과(%s)", 검색어)
+        await interaction.followup.send(f"⏱️ `{검색어}` 유튜브 검색이 너무 오래 걸려 취소했어요. 잠시 후 다시 시도해 주세요.")
+        return
     except Exception as exc:  # noqa: BLE001
         log.warning("검색 실패(%s): %s", 검색어, exc)
         await interaction.followup.send(f"❌ `{검색어}` 를 찾지 못했어요. ({exc})")
         return
+    log.info("검색 완료: %s", info.get("title"))
 
     track = Track(
         title=info.get("title") or "제목 없음",
