@@ -1,0 +1,20 @@
+# 실행 중에 생기는 것들 — 저장소에 올리지 않습니다
+.venv/
+__pycache__/
+*.pyc
+logs/
+*.log
+
+# 봇 토큰 — 절대 커밋 금지
+.env
+**/.env
+!.env.example
+**/!.env.example
+cookies.txt
+
+# 뮤직봇 FFmpeg 바이너리
+tools/*/bin/
+
+# OS
+.DS_Store
+Thumbs.db

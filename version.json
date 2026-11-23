@@ -1,0 +1,15 @@
+{
+  "version": "1.0.0",
+  "released": "2026-11-23",
+  "name": "백수톡 디코봇",
+  "zip": "https://github.com/anchirong9-arch/discord-bots-launcher/archive/refs/heads/main.zip",
+  "zip_fallback": "https://github.com/anchirong9-arch/discord-bots-launcher/releases/latest/download/discord-bots-launcher.zip",
+  "version_url": "https://raw.githubusercontent.com/anchirong9-arch/discord-bots-launcher/main/version.json",
+  "notes": [
+    "료그봇·뮤직봇 전용 런처 — 실행하기.bat 하나로 두 봇을 백그라운드에서 켭니다",
+    "까만 콘솔 창 없이 실행(pythonw) + 주소창 없는 상태판 창",
+    "실행할 때 GitHub에서 새 버전을 확인해 자동으로 업데이트 (.env·로그 보존)",
+    "바탕화면에 '백수톡 디코봇' 바로가기 만들기",
+    "상태판에서 온라인/오프라인 확인 · 켜기/끄기 · 토큰 넣기"
+  ]
+}

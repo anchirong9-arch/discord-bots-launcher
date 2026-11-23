@@ -1,0 +1,109 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="theme-color" content="#0d0f13">
+<title>백수톡 디코봇 — 료그봇 · 뮤직봇</title>
+<meta name="app-version" content="1.0.0">
+<meta name="description" content="료그봇·뮤직봇을 백그라운드에서 한 번에 켜고 끄는 전용 런처 상태판">
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='8' fill='%235865f2'/%3E%3Cpath d='M11 12h10M11 17h6' stroke='%23fff' stroke-width='2.4' stroke-linecap='round'/%3E%3Ccircle cx='21' cy='20' r='3' fill='%23fff'/%3E%3C/svg%3E">
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+
+<header class="topbar">
+  <div class="brand">
+    <span class="logo" aria-hidden="true"></span>
+    <div>
+      <b>백수톡 디코봇</b>
+      <small>료그봇 · 뮤직봇 전용 런처</small>
+    </div>
+  </div>
+  <div class="top-right">
+    <span class="sum wait" id="sum" role="status" aria-live="polite"><i></i><b>확인 중…</b></span>
+    <button class="icon-btn" id="refresh" type="button" aria-label="상태 새로고침" title="상태 새로고침">
+      <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M17.65 6.35A7.96 7.96 0 0 0 12 4a8 8 0 1 0 7.73 10h-2.08A6 6 0 1 1 12 6c1.66 0 3.14.69 4.22 1.78L13 11h7V4l-2.35 2.35Z"/></svg>
+    </button>
+  </div>
+</header>
+
+<main class="wrap">
+
+  <section class="hero">
+    <p class="kicker">DISCORD BOTS LAUNCHER</p>
+    <h1>봇 둘, <em>백그라운드에서</em></h1>
+    <p class="lede">
+      <b>료그봇</b>과 <b>뮤직봇</b>이 이 PC에서 같이 돌아요.
+      이 창을 닫아도 봇은 계속되고, 끌 때는 <code>종료하기.bat</code> 하나면 돼요.
+    </p>
+  </section>
+
+  <div class="grid" id="cards">
+    <!-- 카드는 app.js 가 /api/status 로 채웁니다 -->
+    <article class="card skeleton"></article>
+    <article class="card skeleton"></article>
+  </div>
+
+  <section class="panel">
+    <div class="panel-head">
+      <b>📜 봇 로그</b>
+      <span class="pill off" id="logName">—</span>
+    </div>
+    <pre id="logBox" class="log-box">카드의 <b>로그</b>를 누르면 마지막 실행 기록이 여기 보여요.</pre>
+  </section>
+
+  <section class="faq">
+    <details>
+      <summary>토큰은 어디에 저장되나요?</summary>
+      <p><code>tools\log-bot\.env</code> · <code>tools\music-bot\.env</code> 에만 저장되고 GitHub에는 올라가지 않아요. 업데이트해도 이 파일은 그대로 보존됩니다.</p>
+    </details>
+    <details>
+      <summary>예전에 쓰던 봇 폴더가 있어요</summary>
+      <p>그 폴더의 <code>.env</code> 파일을 <code>tools\log-bot</code>·<code>tools\music-bot</code> 에 각각 복사해 넣으면 끝이에요. 또는 카드의 <b>토큰 넣기</b>에 .env 내용을 통째로 붙여넣어도 됩니다.</p>
+    </details>
+    <details>
+      <summary>봇이 오프라인이에요</summary>
+      <p>카드의 <b>켜기</b>를 누르고 몇 초 기다려 보세요. 그래도 안 되면 <b>로그</b>에 나온 마지막 줄을 확인해 주세요. 토큰을 새로 발급했다면 <b>토큰 넣기</b>로 다시 저장하면 됩니다.</p>
+    </details>
+  </section>
+
+  <footer class="foot">
+    <p>anchirong9-arch · discord-bots-launcher <span id="footVer">v1.0.0</span></p>
+    <p class="foot-links">
+      <a href="https://github.com/anchirong9-arch/discord-bots-launcher" target="_blank" rel="noopener">저장소</a>
+      <a href="#" id="updateCheck">업데이트 확인</a>
+    </p>
+  </footer>
+
+</main>
+
+<dialog id="tokenModal" class="modal">
+  <form method="dialog" id="tokenForm" class="modal-box">
+    <div class="modal-head">
+      <b id="tokenTitle">토큰 넣기</b>
+      <button class="icon-btn" type="button" id="tokenClose" aria-label="닫기">✕</button>
+    </div>
+    <p class="modal-txt">
+      디스코드 개발자 포털 <b>Bot → Reset Token</b> 에서 복사한 값을 넣거나,
+      기존 봇 폴더의 <b>.env 내용을 통째로</b> 붙여넣어도 돼요.
+      토큰은 <b>이 PC에만</b> 저장되고 GitHub·디스코드에는 올라가지 않아요.
+    </p>
+    <label class="modal-field">
+      <span>.env 내용 또는 토큰</span>
+      <textarea id="tokenText" rows="4" spellcheck="false" placeholder="DISCORD_TOKEN=...&#10;(또는 토큰만 붙여넣기)"></textarea>
+    </label>
+    <div class="modal-row">
+      <button class="btn primary" type="submit" id="tokenSave">저장하고 켜기</button>
+      <a class="btn ghost" id="tokenPortal" href="#" target="_blank" rel="noopener">토큰 발급 페이지</a>
+      <span class="msg" id="tokenMsg"></span>
+    </div>
+    <p class="fine" id="tokenWhere">저장 위치: —</p>
+  </form>
+</dialog>
+
+<div class="toast" id="toast" role="status" aria-live="polite" hidden></div>
+
+<script src="app.js"></script>
+</body>
+</html>
