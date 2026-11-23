@@ -12,6 +12,9 @@ logs/
 **/!.env.example
 cookies.txt
 
+# 슬래시 명령어 등록 흔적 (실행 중에 생김)
+.command-sync.json
+
 # 뮤직봇 FFmpeg 바이너리
 tools/*/bin/
 

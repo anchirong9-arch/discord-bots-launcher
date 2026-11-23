@@ -103,7 +103,7 @@ BOTS = [
             ("LOG_USER_ID", ""),
         ],
         "token_url": "https://discord.com/developers/applications/1572393464576876594/bot",
-        "invite": "https://discord.com/oauth2/authorize?client_id=1572393464576876594&permissions=117888&integration_type=0&scope=bot",
+        "invite": "https://discord.com/oauth2/authorize?client_id=1572393464576876594&permissions=126080&integration_type=0&scope=bot",
         "desc": "백수톡의 사진·파일·삭제·수정·입퇴장·음성까지 내 개인 서버 #백수톡-로그에 원본 그대로 남겨요.",
         "meta": "백수톡 로그 · 사진 원본 보존",
     },

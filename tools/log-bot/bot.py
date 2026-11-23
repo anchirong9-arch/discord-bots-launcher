@@ -11,14 +11,20 @@
 from __future__ import annotations
 
 import asyncio
+import hashlib
 import io
+import json
 import logging
 import os
+import random
+import time
 from dataclasses import dataclass, field
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
+from pathlib import Path
 from typing import Iterable, Optional
 
 import discord
+from discord import app_commands
 from dotenv import load_dotenv
 
 import logfmt
@@ -60,6 +66,12 @@ COLOR = {
 }
 
 IMAGE_EXT = (".png", ".jpg", ".jpeg", ".gif", ".webp", ".bmp", ".heic", ".avif")
+
+# 유틸리티 명령어 공통 색 — 라일락 보라
+PURPLE = 0xC084FC
+# 명령어를 마지막으로 디스코드에 등록한 흔적 (내용이 바뀔 때만 다시 등록)
+SYNC_MARKER = Path(__file__).resolve().parent / ".command-sync.json"
+VENUE = "백수톡"
 
 
 # ---------------------------------------------------------------------------
@@ -320,6 +332,393 @@ def permission_diff(before, after) -> list[str]:
 
 
 # ---------------------------------------------------------------------------
+# 유틸리티 명령어 (/지우개 /뽑기 /투표 /타이머 /공지 /사용법)
+#   — 임베드는 디스코드 연결 없이도 만들 수 있게 순수 함수로 둔다.
+# ---------------------------------------------------------------------------
+
+BAR_FULL = "█"
+BAR_EMPTY = "░"
+MAX_VOTE_OPTIONS = 5
+MAX_PICK_ITEMS = 25
+VOTE_SECONDS = 3600  # 투표 버튼을 받아 두는 시간 (1시간)
+
+
+def _bar(ratio: float, width: int = 12) -> str:
+    filled = int(round(max(0.0, min(1.0, ratio)) * width))
+    return BAR_FULL * filled + BAR_EMPTY * (width - filled)
+
+
+def split_items(text: str, limit: int = MAX_PICK_ITEMS) -> list[str]:
+    """`사과, 배 , 감` 처럼 쉼표(또는 줄바꿈)로 적은 항목을 깔끔하게 나눈다."""
+    raw = (text or "").replace("\r", "").replace("\n", ",")
+    items = [part.strip() for part in raw.split(",")]
+    return [item for item in items if item][:limit]
+
+
+def build_pick_embed(pool: list[str], picked: str) -> discord.Embed:
+    embed = discord.Embed(title="🎲 뽑기 결과", colour=PURPLE, timestamp=_now())
+    embed.add_field(name="뽑힌 항목", value=logfmt.shorten(picked, 256), inline=False)
+    embed.add_field(
+        name=f"후보 {len(pool)}개",
+        value=logfmt.shorten(", ".join(pool), 1000),
+        inline=False,
+    )
+    embed.set_footer(text=f"{VENUE} · 후보 {len(pool)}개 중 1개")
+    return embed
+
+
+def build_team_embed(team1: list[str], team2: list[str]) -> discord.Embed:
+    embed = discord.Embed(title="🎲 팀 나누기", colour=PURPLE, timestamp=_now())
+    embed.add_field(
+        name=f"1팀 ({len(team1)}명)",
+        value=logfmt.shorten("\n".join(f"· {name}" for name in team1) or "—", 1000),
+        inline=True,
+    )
+    embed.add_field(
+        name=f"2팀 ({len(team2)}명)",
+        value=logfmt.shorten("\n".join(f"· {name}" for name in team2) or "—", 1000),
+        inline=True,
+    )
+    embed.set_footer(text=f"{VENUE} · {len(team1) + len(team2)}명을 절반씩 나눴어요")
+    return embed
+
+
+def vote_counts(options: list[str], votes: dict) -> list[int]:
+    counts = [0] * len(options)
+    for index in (votes or {}).values():
+        if isinstance(index, int) and 0 <= index < len(options):
+            counts[index] += 1
+    return counts
+
+
+def build_vote_embed(question: str, options: list[str], votes: dict, closed: bool = False) -> discord.Embed:
+    counts = vote_counts(options, votes)
+    total = sum(counts)
+    lines = []
+    for index, option in enumerate(options):
+        ratio = (counts[index] / total) if total else 0.0
+        lines.append(f"`{_bar(ratio)}` **{counts[index]}표** ({ratio * 100:.0f}%) · {option}")
+    embed = discord.Embed(
+        title="🗳️ 투표 — 마감" if closed else "🗳️ 투표",
+        description=logfmt.shorten(f"**{question}**", 2000),
+        colour=PURPLE,
+        timestamp=_now(),
+    )
+    embed.add_field(
+        name="결과" if total else "아직 표가 없어요 — 버튼을 눌러 주세요",
+        value=logfmt.shorten("\n".join(lines), 1024),
+        inline=False,
+    )
+    tail = f"총 {total}표 · 1인 1표" + ("" if closed else f" · {VOTE_SECONDS // 60}분 뒤 자동 마감")
+    embed.set_footer(text=f"{VENUE} · {tail}")
+    return embed
+
+
+def format_minutes(minutes: int) -> str:
+    if minutes < 60:
+        return f"{minutes}분"
+    hours, rest = divmod(minutes, 60)
+    return f"{hours}시간 {rest}분" if rest else f"{hours}시간"
+
+
+def build_timer_start_embed(minutes: int, memo: str, when: datetime) -> discord.Embed:
+    embed = discord.Embed(
+        title="⏰ 타이머 시작",
+        description=logfmt.shorten(memo, 1000) if memo else "시간이 다 되면 이 채널에서 알려 드릴게요.",
+        colour=PURPLE,
+        timestamp=_now(),
+    )
+    embed.add_field(name="알림까지", value=format_minutes(minutes), inline=True)
+    embed.add_field(name="알림 시각", value=discord.utils.format_dt(when, "t"), inline=True)
+    embed.set_footer(text=f"{VENUE} · 봇을 끄면 타이머도 사라져요")
+    return embed
+
+
+def build_timer_alert_embed(minutes: int, memo: str) -> discord.Embed:
+    embed = discord.Embed(
+        title="⏰ 타이머 끝!",
+        description=logfmt.shorten(memo, 1000) if memo else "설정한 시간이 다 됐어요.",
+        colour=PURPLE,
+        timestamp=_now(),
+    )
+    embed.set_footer(text=f"{VENUE} · {format_minutes(minutes)} 타이머")
+    return embed
+
+
+def build_notice_embed(title: str, content: str, author=None) -> discord.Embed:
+    body = (content or "").replace("\\n", "\n")
+    embed = discord.Embed(
+        title=logfmt.shorten(f"📢 {title}", 256),
+        description=logfmt.shorten(body, 4000),
+        colour=PURPLE,
+        timestamp=_now(),
+    )
+    if author is not None:
+        name = getattr(author, "display_name", None) or getattr(author, "name", None)
+        if name:
+            embed.set_author(name=name, icon_url=getattr(getattr(author, "display_avatar", None), "url", None))
+    embed.set_footer(text=f"{VENUE} 공지")
+    return embed
+
+
+USAGE_ROWS = [
+    (
+        "/지우개 개수:10",
+        "이 채널의 최근 메시지를 지웁니다. (1~100, 기본 10)\n"
+        "**예:** `/지우개 개수:20`",
+    ),
+    (
+        "/뽑기 항목:치킨,피자,족발 [팀나누기:True]",
+        "쉼표로 나눈 항목 중 하나를 뽑습니다. `팀나누기:True` 면 절반씩 1팀·2팀으로 나눠요.\n"
+        "**예:** `/뽑기 항목:철수,영희,민수,지수 팀나누기:True`",
+    ),
+    (
+        "/투표 질문:오늘 저녁? 선택지:치킨,피자,족발",
+        "버튼 투표를 엽니다. 선택지는 2~5개, 1인 1표이고 다른 버튼을 누르면 표가 옮겨져요. "
+        f"{VOTE_SECONDS // 60}분 뒤 자동 마감.",
+    ),
+    (
+        "/타이머 분:25 메모:라면 불 끄기",
+        "정한 시간이 지나면 이 채널에서 알려 줍니다. (1~180분, 메모는 선택)",
+    ),
+    (
+        "/공지 제목:서버 규칙 내용:1. 욕설 금지\\n2. 광고 금지",
+        "보라색 공지 박스를 이 채널에 올립니다. `\\n` 으로 줄을 바꿀 수 있어요.",
+    ),
+]
+
+USAGE_CAUTIONS = (
+    "• `/지우개` 는 **2주(14일)가 지난 메시지**를 디스코드 정책상 일괄로 지울 수 없어 일부가 남을 수 있어요.\n"
+    "• `/지우개` 는 실행한 사람과 봇 모두에게 **메시지 관리** 권한이 있어야 하고, 고정(핀)한 메시지도 함께 지워져요.\n"
+    "• `/투표` 버튼은 1시간이 지나면 자동으로 닫히고, 봇을 다시 켜면 진행 중이던 투표 버튼은 눌리지 않아요.\n"
+    "• `/타이머` 는 봇이 켜져 있는 동안만 알려 줍니다."
+)
+
+
+def build_usage_embed() -> discord.Embed:
+    embed = discord.Embed(
+        title="🤖 료그봇 사용법 — 유틸리티 명령어",
+        description="앞에 `/` 를 붙여 쓰면 됩니다. 디스코드 입력창에 `/` 만 쳐도 목록이 떠요.",
+        colour=PURPLE,
+    )
+    for name, description in USAGE_ROWS:
+        embed.add_field(name=name, value=logfmt.shorten(description, 1000), inline=False)
+    embed.add_field(name="주의사항", value=USAGE_CAUTIONS, inline=False)
+    embed.set_footer(text=f"{VENUE} · 로그 기록 기능은 그대로 돌아가요")
+    return embed
+
+
+class VoteView(discord.ui.View):
+    """`/투표` 버튼 — 한 사람 한 표, 다른 버튼을 누르면 표가 옮겨진다."""
+
+    def __init__(self, question: str, options: list[str], timeout: Optional[float] = VOTE_SECONDS):
+        super().__init__(timeout=timeout)
+        self.question = question
+        self.options = options
+        self.votes: dict[int, int] = {}
+        self.closed = False
+        for index, option in enumerate(options):
+            self.add_item(VoteButton(index, option))
+
+    def embed(self, closed: Optional[bool] = None) -> discord.Embed:
+        return build_vote_embed(
+            self.question,
+            self.options,
+            self.votes,
+            closed=self.closed if closed is None else closed,
+        )
+
+    async def on_timeout(self) -> None:
+        self.closed = True
+        for item in self.children:
+            item.disabled = True
+        message = getattr(self, "message", None)
+        if message is None:
+            return
+        try:
+            await message.edit(embed=self.embed(closed=True), view=self)
+        except Exception:
+            log.warning("투표 마감 표시 실패", exc_info=True)
+
+
+class VoteButton(discord.ui.Button):
+    def __init__(self, index: int, label: str):
+        super().__init__(
+            label=logfmt.shorten(label, 80),
+            style=discord.ButtonStyle.primary,
+            custom_id=f"vote:{index}",
+            row=0,
+        )
+        self.index = index
+
+    async def callback(self, interaction: discord.Interaction) -> None:
+        view: VoteView = self.view
+        if view is None or view.closed:
+            await interaction.response.send_message("이 투표는 이미 마감됐어요.", ephemeral=True)
+            return
+        current = view.votes.get(interaction.user.id)
+        if current == self.index:
+            await interaction.response.send_message(
+                "이미 이 항목에 투표했어요. 다른 항목을 누르면 표가 옮겨져요.", ephemeral=True
+            )
+            return
+        view.votes[interaction.user.id] = self.index
+        await interaction.response.edit_message(embed=view.embed(), view=view)
+
+
+async def _reply(interaction: discord.Interaction, text: str) -> None:
+    """이미 응답했으면 followup 으로, 아니면 ephemeral 응답으로 안내한다."""
+    if interaction.response.is_done():
+        await interaction.followup.send(text, ephemeral=True)
+    else:
+        await interaction.response.send_message(text, ephemeral=True)
+
+
+def command_signature(tree: app_commands.CommandTree) -> str:
+    parts = []
+    for command in sorted(tree.get_commands(), key=lambda c: c.name):
+        params = ",".join(f"{p.name}:{p.required}" for p in command.parameters)
+        parts.append(f"{command.name}({params})")
+    return hashlib.sha1("|".join(parts).encode("utf-8")).hexdigest()
+
+
+def register_commands(bot: "LogBot") -> None:
+    """유틸리티 슬래시 명령어 6종을 봇의 명령어 트리에 붙인다."""
+
+    @app_commands.command(name="지우개", description="이 채널의 최근 메시지를 지웁니다 (최대 100개)")
+    @app_commands.rename(count="개수")
+    @app_commands.describe(count="지울 메시지 수 (1~100, 기본 10)")
+    @app_commands.guild_only()
+    async def erase(interaction: discord.Interaction, count: app_commands.Range[int, 1, 100] = 10) -> None:
+        channel = interaction.channel
+        if interaction.guild is None or not isinstance(
+            channel, (discord.TextChannel, discord.VoiceChannel, discord.StageChannel, discord.Thread)
+        ):
+            await _reply(interaction, "이 채널에서는 `/지우개` 를 쓸 수 없어요. 일반 텍스트 채널에서 써 주세요.")
+            return
+
+        member_perms = channel.permissions_for(interaction.user)
+        if not (member_perms.manage_messages or member_perms.administrator):
+            await _reply(
+                interaction,
+                "`/지우개` 는 **메시지 관리** 권한이 있는 사람만 쓸 수 있어요.\n"
+                "서버 관리자에게 권한을 요청해 주세요.",
+            )
+            return
+
+        bot_perms = channel.permissions_for(interaction.guild.me)
+        missing = []
+        if not bot_perms.manage_messages:
+            missing.append("메시지 관리")
+        if not bot_perms.read_message_history:
+            missing.append("메시지 기록 읽기")
+        if missing:
+            await _reply(
+                interaction,
+                "봇에게 권한이 없어서 지울 수 없어요.\n"
+                f"필요한 권한: {', '.join('**' + name + '**' for name in missing)}\n"
+                "서버 설정 → 역할 → 봇 역할에서 켜 주세요.",
+            )
+            return
+
+        await interaction.response.defer(thinking=True, ephemeral=True)
+        bot.suppress_delete_logs(channel.id)
+        try:
+            deleted = await channel.purge(limit=int(count))
+        except discord.Forbidden:
+            await _reply(
+                interaction,
+                "디스코드가 삭제를 거부했어요. 봇 역할이 이 채널보다 위에 있는지, "
+                "**메시지 관리** 권한이 있는지 확인해 주세요.",
+            )
+            return
+        except discord.HTTPException as exc:
+            await _reply(interaction, f"삭제하다가 문제가 생겼어요: `{exc}`")
+            return
+
+        text = f"🧹 이 채널의 최근 메시지 **{len(deleted)}개**를 지웠어요."
+        if len(deleted) < int(count):
+            text += (
+                f"\n요청은 {count}개였는데, 이미 지워졌거나 2주가 지나 일괄 삭제가 안 되는 메시지는 남았어요."
+            )
+        await _reply(interaction, text)
+
+    @app_commands.command(name="뽑기", description="항목 중 하나를 뽑거나 팀을 나눕니다")
+    @app_commands.rename(items="항목", split="팀나누기")
+    @app_commands.describe(
+        items="쉼표(,)로 구분한 항목들 (2개 이상)",
+        split="True 면 절반씩 1팀·2팀으로 나눕니다",
+    )
+    async def draw(interaction: discord.Interaction, items: str, split: bool = False) -> None:
+        pool = split_items(items)
+        if len(pool) < 2:
+            await _reply(
+                interaction,
+                "항목을 쉼표(`,`)로 구분해 **2개 이상** 적어 주세요.\n"
+                "예: `/뽑기 항목:치킨,피자,족발`",
+            )
+            return
+        if split:
+            shuffled = pool[:]
+            random.shuffle(shuffled)
+            half = (len(shuffled) + 1) // 2
+            embed = build_team_embed(shuffled[:half], shuffled[half:])
+        else:
+            embed = build_pick_embed(pool, random.choice(pool))
+        await interaction.response.send_message(embed=embed)
+
+    @app_commands.command(name="투표", description="2~5개 선택지로 버튼 투표를 엽니다")
+    @app_commands.rename(question="질문", options="선택지")
+    @app_commands.describe(question="투표할 질문", options="쉼표(,)로 구분한 2~5개 선택지")
+    async def vote(interaction: discord.Interaction, question: str, options: str) -> None:
+        choices = split_items(options, limit=MAX_VOTE_OPTIONS)
+        if len(choices) < 2:
+            await _reply(
+                interaction,
+                "선택지는 쉼표(`,`)로 구분해 **2~5개** 적어 주세요.\n"
+                "예: `/투표 질문:오늘 저녁 뭐 먹지? 선택지:치킨,피자,족발`",
+            )
+            return
+        view = VoteView(question=question, options=choices)
+        await interaction.response.send_message(embed=view.embed(), view=view)
+        try:
+            view.message = await interaction.original_response()
+        except Exception:
+            log.warning("투표 메시지를 잡지 못했습니다", exc_info=True)
+
+    @app_commands.command(name="타이머", description="정한 시간이 지나면 이 채널에서 알려 줍니다")
+    @app_commands.rename(minutes="분", memo="메모")
+    @app_commands.describe(minutes="몇 분 뒤에 알려 줄지 (1~180)", memo="무엇을 알려 줄지 (선택)")
+    async def timer(
+        interaction: discord.Interaction,
+        minutes: app_commands.Range[int, 1, 180],
+        memo: Optional[str] = None,
+    ) -> None:
+        channel = interaction.channel
+        if channel is None or not hasattr(channel, "send"):
+            await _reply(interaction, "채널에서만 쓸 수 있어요.")
+            return
+        note = (memo or "").strip()
+        when = _now() + timedelta(minutes=int(minutes))
+        await interaction.response.send_message(embed=build_timer_start_embed(int(minutes), note, when))
+        bot.start_timer(channel, interaction.user, int(minutes), note)
+
+    @app_commands.command(name="공지", description="보라색 공지 박스를 이 채널에 올립니다")
+    @app_commands.rename(title="제목", content="내용")
+    @app_commands.describe(title="공지 제목", content="공지 내용 (`\\n` 으로 줄바꿈)")
+    async def notice(interaction: discord.Interaction, title: str, content: str) -> None:
+        embed = build_notice_embed(title, content, interaction.user)
+        await interaction.response.send_message(embed=embed)
+
+    @app_commands.command(name="사용법", description="료그봇 유틸리티 명령어 사용법을 보여 줍니다")
+    async def usage(interaction: discord.Interaction) -> None:
+        await interaction.response.send_message(embed=build_usage_embed(), ephemeral=True)
+
+    for command in (erase, draw, vote, timer, notice, usage):
+        bot.tree.add_command(command)
+
+
+# ---------------------------------------------------------------------------
 # 봇 본체
 # ---------------------------------------------------------------------------
 
@@ -339,15 +738,20 @@ class LogBot(discord.Client):
         intents.guilds = True
         intents.moderation = True
         super().__init__(intents=intents, **kwargs)
+        # 슬래시 명령어 트리 (discord.Client 는 자동으로 만들지 않아 직접 붙인다)
+        self.tree: app_commands.CommandTree = app_commands.CommandTree(self)
         self.queue: "asyncio.Queue[LogItem]" = asyncio.Queue()
         self.cache = logfmt.AttachmentCache(CACHE_MAX_FILES, CACHE_MAX_BYTES)
         self.log_channel: Optional[discord.abc.Messageable] = None
         self.dm_user: Optional[discord.User] = None
         self._sender_task: Optional[asyncio.Task] = None
+        self._timers: set = set()
+        self._purge_suppress: dict[int, float] = {}
 
     # -- 시작 ---------------------------------------------------------------
 
     async def setup_hook(self) -> None:
+        register_commands(self)
         self._sender_task = asyncio.create_task(self._sender(), name="log-sender")
         if os.getenv("PORT"):
             asyncio.create_task(_start_health_server(), name="health-server")
@@ -363,6 +767,43 @@ class LogBot(discord.Client):
             log.warning("감시 대상 서버(%s)에 봇이 없습니다. 초대 링크로 봇을 초대해 주세요.", SOURCE_GUILD_ID)
         if LOG_USER_ID:
             log.info("디엠 사본: 사용자 ID %s", LOG_USER_ID)
+        await self._sync_commands()
+
+    async def _sync_commands(self) -> None:
+        """슬래시 명령어를 디스코드에 등록한다.
+
+        명령어 구성이 그저껄과 같으면 건너뜀(디스코드 등록 제한에 부딪히지 않게).
+        다시 강제로 등록하려면 tools/log-bot/.command-sync.json 을 지우고 재시작.
+        """
+        names = ", ".join("/" + command.name for command in self.tree.get_commands())
+        signature = command_signature(self.tree)
+        try:
+            saved = json.loads(SYNC_MARKER.read_text(encoding="utf-8")).get("signature")
+        except Exception:
+            saved = None
+        if saved == signature:
+            log.info("슬래시 명령어 %d건 — 이미 등록된 구성이라 건너뜁니다 (%s)", len(self.tree.get_commands()), names)
+            return
+        try:
+            synced = await self.tree.sync()
+        except discord.HTTPException as exc:
+            log.warning("슬래시 명령어 등록 실패(%s) — 다음 실행에서 다시 시도합니다", exc)
+            return
+        log.info("슬래시 명령어 %d건 등록 완료: %s", len(synced), names)
+        for guild in list(self.guilds):
+            try:
+                self.tree.copy_global_to(guild=guild)
+                await self.tree.sync(guild=guild)
+                log.info("'%s' 서버에는 바로 반영했습니다", guild.name)
+            except Exception:
+                log.warning("'%s' 서버에 명령어를 바로 반영하지 못했습니다", getattr(guild, "name", guild), exc_info=True)
+        try:
+            SYNC_MARKER.write_text(
+                json.dumps({"signature": signature, "synced_at": _now().isoformat(timespec="seconds")}, ensure_ascii=False),
+                encoding="utf-8",
+            )
+        except Exception:
+            log.warning("명령어 등록 기록을 저장하지 못했습니다", exc_info=True)
 
     async def _resolve_targets(self) -> None:
         if self.log_channel is None and LOG_CHANNEL_ID:
@@ -380,6 +821,45 @@ class LogBot(discord.Client):
 
     def enqueue(self, item: LogItem) -> None:
         self.queue.put_nowait(item)
+
+    # -- 타이머 -------------------------------------------------------------
+
+    def start_timer(self, channel, user, minutes: int, memo: str) -> None:
+        task = asyncio.create_task(
+            self._run_timer(channel, user, minutes, memo), name=f"timer-{minutes}m"
+        )
+        self._timers.add(task)
+        task.add_done_callback(self._timers.discard)
+        log.info("타이머 시작: %s분 · %s · %s", minutes, getattr(channel, "name", "?"), memo or "(메모 없음)")
+
+    async def _run_timer(self, channel, user, minutes: int, memo: str) -> None:
+        try:
+            await asyncio.sleep(minutes * 60)
+            await channel.send(
+                content=f"{getattr(user, 'mention', '')} ⏰".strip(),
+                embed=build_timer_alert_embed(minutes, memo),
+                allowed_mentions=discord.AllowedMentions(users=True, roles=False, everyone=False),
+            )
+        except asyncio.CancelledError:
+            raise
+        except Exception:
+            log.warning("타이머 알림 전송 실패 (%s분)", minutes, exc_info=True)
+
+    # -- /지우개 로그 조용히 -----------------------------------------------
+
+    def suppress_delete_logs(self, channel_id: int, seconds: float = 20.0) -> None:
+        """`/지우개` 가 지운 메시지는 한 건짜리 삭제 로그를 따로 남기지 않는다."""
+        self._purge_suppress[channel_id] = time.monotonic() + seconds
+
+    def delete_log_suppressed(self, message) -> bool:
+        channel_id = getattr(getattr(message, "channel", None), "id", 0)
+        until = self._purge_suppress.get(channel_id, 0.0)
+        if not until:
+            return False
+        if until <= time.monotonic():
+            self._purge_suppress.pop(channel_id, None)
+            return False
+        return True
 
     async def _sender(self) -> None:
         await self.wait_until_ready()
@@ -467,6 +947,8 @@ class LogBot(discord.Client):
 
     async def on_message_delete(self, message: discord.Message) -> None:
         if self._skip(message):
+            return
+        if self.delete_log_suppressed(message):
             return
         cached = self.cache.get(getattr(message, "id", 0))
         self.cache.drop(getattr(message, "id", 0))
