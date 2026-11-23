@@ -186,6 +186,7 @@
     try {
       const data = await getJSON(`${HUB_BASE}/api/log?bot=${encodeURIComponent(botId)}`, 3000);
       $('#logBox').textContent = (data.log || '').trim() || '(아직 기록이 없어요)';
+      $('#logBox').scrollIntoView({ behavior: 'smooth', block: 'nearest' });
     } catch (err) {
       if (!silent) $('#logBox').textContent = '로그를 읽지 못했어요.';
     }
