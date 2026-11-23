@@ -60,9 +60,9 @@
 
   function renderCard(bot, offline = false) {
     const grid = $('#cards');
+    grid.querySelectorAll('.skeleton').forEach(el => el.remove());
     let card = grid.querySelector(`[data-bot="${bot.id}"]`);
-    if (!card || card.classList.contains('skeleton')) {
-      if (card) card.remove();
+    if (!card) {
       card = document.createElement('article');
       card.className = 'card';
       card.dataset.bot = bot.id;
@@ -99,8 +99,11 @@
 
     $('[data-start]', card).hidden = offline || bot.running || !bot.tokenSet;
     $('[data-stop]', card).hidden = offline || !bot.running;
-    $('[data-token]', card).textContent = bot.tokenSet ? '토큰 바꾸기' : '토큰 넣기';
-    $('[data-token]', card).disabled = offline;
+    const tokBtn = $('[data-token]', card);
+    tokBtn.textContent = bot.tokenSet ? '토큰 바꾸기' : '토큰 넣기';
+    tokBtn.classList.toggle('primary', !bot.tokenSet && !offline);
+    tokBtn.classList.toggle('ghost', bot.tokenSet || offline);
+    tokBtn.disabled = offline;
     $('[data-log]', card).disabled = offline;
   }
 
