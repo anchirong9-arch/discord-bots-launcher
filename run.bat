@@ -1,4 +1,4 @@
-﻿@echo off
+@echo off
 rem English-named launcher, same as 실행하기.bat
 chcp 65001 >nul 2>nul
 setlocal

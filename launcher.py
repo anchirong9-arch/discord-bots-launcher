@@ -346,7 +346,10 @@ def bot_modules_ok(bot: dict) -> bool:
 
 
 def ffmpeg_for_bot() -> str:
-    """뮤직봇이 쓸 ffmpeg — FFMPEG_PATH → tools/music-bot/bin → imageio-ffmpeg → PATH."""
+    """뮤직봇이 쓸 ffmpeg — FFMPEG_PATH → tools/music-bot/bin → PATH → imageio-ffmpeg.
+
+    이미 PC에 깔려 잘 돌던 ffmpeg(PATH·bin)를 먼저 쓰고, 없을 때만 imageio-ffmpeg 동봉본을 씁니다.
+    """
     env_path = (os.getenv("FFMPEG_PATH") or "").strip().strip('"')
     if env_path and Path(env_path).is_file():
         return env_path
@@ -354,6 +357,9 @@ def ffmpeg_for_bot() -> str:
         candidate = bot_dir(BOT_BY_ID["music-bot"]) / "bin" / name
         if candidate.is_file():
             return str(candidate)
+    on_path = shutil.which("ffmpeg")
+    if on_path:
+        return on_path
     try:
         import imageio_ffmpeg  # type: ignore
         exe = imageio_ffmpeg.get_ffmpeg_exe()
@@ -361,7 +367,7 @@ def ffmpeg_for_bot() -> str:
             return exe
     except Exception:  # noqa: BLE001
         pass
-    return shutil.which("ffmpeg") or ""
+    return ""
 
 
 def _redact(text: str) -> str:

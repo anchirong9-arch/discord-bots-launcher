@@ -79,7 +79,7 @@ discord-bots-launcher/
 `No module named ...` 이면 **`실행하기.bat`** 을 다시 실행해 패키지를 설치하세요.
 
 **뮤직봇에서 소리가 안 나요**
-`imageio-ffmpeg` 가 함께 설치한 ffmpeg를 자동으로 씁니다. 그래도 안 되면 `tools\music-bot\bin\ffmpeg.exe` 에 직접 넣어도 됩니다.
+PC에 이미 있는 ffmpeg(`PATH` 또는 `tools\music-bot\bin`)를 먼저 쓰고, 없으면 `imageio-ffmpeg` 가 함께 설치한 ffmpeg를 씁니다. 그래도 안 되면 `tools\music-bot\bin\ffmpeg.exe` 에 직접 넣어 주세요.
 
 **예전 폴더에서 돌던 봇이랑 같이 켜지나요?**
 같은 토큰으로 두 번 로그인하면 하나가 끊깁니다. 예전 폴더의 봇 창은 닫고 이 런처만 쓰세요.
